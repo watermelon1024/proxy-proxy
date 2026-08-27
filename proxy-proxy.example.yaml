@@ -11,7 +11,10 @@
 subs:
   - url: https://provider-a.example.com/sub/xxxxxxxx
     type: auto # auto | base64 | clash (default: auto)
-    interval: 3h # accepts 3h, 30min, 2hr, 1d, 1h30m, plain seconds... (default 1h, min 1m)
+    # refresh period. units: s/sec, m/min, h/hr, d/day, combinable,
+    # e.g. 3h, 30min, 2hr, 1d, 1h30m; a bare number means seconds.
+    # default: 1h, minimum: 1m (lower values are silently raised to 1m)
+    interval: 3h
     name: Provider A # optional; referenced by allowed_subs (defaults to the URL host)
 
   - url: https://provider-b.example.com/clash.yaml
