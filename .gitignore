@@ -23,3 +23,6 @@ go.work.sum
 
 # env file
 .env
+
+# real config (contains subscription URLs and access keys)
+proxy-proxy.yaml

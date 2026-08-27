@@ -1,0 +1,30 @@
+# proxy-proxy example config.
+# Copy to proxy-proxy.yaml and fill in your real subscriptions and keys:
+#   cp proxy-proxy.example.yaml proxy-proxy.yaml
+
+# --- optional server settings ---------------------------------------------
+# listen: :8080                  # HTTP listen address (change requires restart)
+# user_agent: clash.meta/1.19.0  # UA sent to upstream providers
+# timeout: 30s                   # upstream fetch timeout
+
+# --- upstream subscriptions -----------------------------------------------
+subs:
+  - url: https://provider-a.example.com/sub/xxxxxxxx
+    type: auto # auto | base64 | clash (default: auto)
+    interval: 3h # accepts 3h, 30min, 2hr, 1d, 1h30m, plain seconds... (default 1h, min 1m)
+    name: Provider A # optional; referenced by allowed_subs (defaults to the URL host)
+
+  - url: https://provider-b.example.com/clash.yaml
+    type: clash
+    interval: 1d
+    name: Provider B
+
+# --- downstream access keys -----------------------------------------------
+# Users subscribe to: http://your-host:8080/sub?key=<key>
+keys:
+  - key: pp-change-me-1
+    # no allowed_subs = this key sees ALL subs
+
+  - key: pp-change-me-2
+    allowed_subs: # names must match subs above
+      - Provider A
