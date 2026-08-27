@@ -23,6 +23,37 @@ Downstream users subscribe to:
 http://your-host:8080/sub?key=pp-123456
 ```
 
+## Docker
+
+```sh
+docker build -t proxy-proxy .
+
+mkdir -p config && cp proxy-proxy.example.yaml config/proxy-proxy.yaml
+# edit config/proxy-proxy.yaml, then:
+docker run -d --name proxy-proxy \
+  -p 8080:8080 \
+  -v "$(pwd)/config:/etc/proxy-proxy:ro" \
+  proxy-proxy
+```
+
+Or with compose:
+
+```yaml
+services:
+  proxy-proxy:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config:/etc/proxy-proxy:ro
+    restart: unless-stopped
+```
+
+Mount the config **directory**, not the single file: editors and `cp` replace
+the file by rename, and a single-file bind mount would keep pointing at the
+old inode, so hot reload would never see your edits. The image runs as a
+non-root user and ships a `/healthz`-based HEALTHCHECK.
+
 ## Configuration
 
 ```yaml

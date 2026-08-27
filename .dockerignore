@@ -1,0 +1,9 @@
+.git
+.gitignore
+.gitattributes
+*.md
+LICENSE
+Dockerfile
+.dockerignore
+# never bake the real config (subscription URLs + access keys) into the image
+proxy-proxy.yaml
