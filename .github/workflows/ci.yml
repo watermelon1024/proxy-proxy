@@ -3,7 +3,13 @@ name: CI
 on:
   push:
     branches: [main]
+    paths: &go-paths
+      - "**.go"
+      - go.mod
+      - go.sum
+      - .github/workflows/ci.yml
   pull_request:
+    paths: *go-paths
 
 permissions:
   contents: read
