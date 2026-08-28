@@ -1,5 +1,4 @@
-// Package agg stores per-subscription node snapshots and renders aggregated,
-// deduplicated subscription payloads.
+// Package agg stores per-subscription node snapshots and renders aggregated, deduplicated subscription payloads.
 package agg
 
 import (
@@ -24,8 +23,7 @@ const (
 	FormatClash  Format = "clash"
 )
 
-// SubState is the latest snapshot for one subscription. Old nodes are kept
-// when a refresh fails.
+// SubState is the latest snapshot for one subscription. Old nodes are kept when a refresh fails.
 type SubState struct {
 	Nodes        []*node.Node
 	Updated      time.Time
@@ -35,9 +33,8 @@ type SubState struct {
 	UserInfo     string // upstream subscription-userinfo header
 }
 
-// Store holds sub snapshots plus a generation-tagged render cache: any sub
-// update bumps the generation, and stale cache entries are re-rendered lazily
-// on the next request.
+// Store holds sub snapshots plus a generation-tagged render cache: any sub update bumps the generation,
+// and stale cache entries are re-rendered lazily on the next request.
 type Store struct {
 	mu    sync.Mutex
 	subs  map[string]*SubState
@@ -147,8 +144,8 @@ func (s *Store) Statuses(order []string) []Status {
 	return out
 }
 
-// Render aggregates the given subs (in config order) into one deduplicated
-// subscription payload. Results are cached until any sub updates.
+// Render aggregates the given subs (in config order) into one deduplicated subscription payload.
+// Results are cached until any sub updates.
 func (s *Store) Render(subs []string, format Format, full bool) (body []byte, etag string) {
 	key := strings.Join(subs, "\x00") + "|" + string(format) + "|" + strconv.FormatBool(full)
 
@@ -175,8 +172,7 @@ func (s *Store) Render(subs []string, format Format, full bool) (body []byte, et
 	return body, etag
 }
 
-// collectLocked merges subs in order, keeping the first occurrence of each
-// dedup key.
+// collectLocked merges subs in order, keeping the first occurrence of each dedup key.
 func (s *Store) collectLocked(subs []string) []*node.Node {
 	var nodes []*node.Node
 	seen := map[string]bool{}

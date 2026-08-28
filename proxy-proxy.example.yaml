@@ -7,13 +7,17 @@
 # user_agent: clash.meta/1.19.0  # UA sent to upstream providers
 # timeout: 30s                   # upstream fetch timeout
 
+# Extra CIDRs/IPs whose X-Forwarded-For is trusted when resolving the client IP for logs.
+# Loopback and private/link-local ranges are always trusted, so a reverse proxy on the
+# same host or Docker network needs no config; add ranges here for proxies reaching this
+# service from elsewhere, e.g. Tailscale (100.64.0.0/10) or another host's public IP.
+# trusted_proxies: [100.64.0.0/10]
+
 # --- upstream subscriptions -----------------------------------------------
 subs:
   - url: https://provider-a.example.com/sub/xxxxxxxx
     type: auto # auto | base64 | clash (default: auto)
-    # refresh period. units: s/sec, m/min, h/hr, d/day, combinable,
-    # e.g. 3h, 30min, 2hr, 1d, 1h30m; a bare number means seconds.
-    # default: 1h, minimum: 1m (lower values are silently raised to 1m)
+    # refresh period: units s/sec, m/min, h/hr, d/day (e.g. 3h, 30min, 2hr, 1d, 1h30m; default 1h, min 1m)
     interval: 3h
     name: Provider A # optional; referenced by allowed_subs (defaults to the URL host)
 

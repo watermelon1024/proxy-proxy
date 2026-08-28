@@ -114,16 +114,16 @@ func TestUnknownSchemePassThrough(t *testing.T) {
 func TestParseContentAuto(t *testing.T) {
 	lines := "trojan://pw@a.example.com:443#A\ntrojan://pw@b.example.com:443#B"
 	b64 := base64.StdEncoding.EncodeToString([]byte(lines))
-	nodes, err := ParseContent("s", []byte(b64), "auto")
-	if err != nil || len(nodes) != 2 {
-		t.Fatalf("auto base64: %v, %d nodes", err, len(nodes))
+	nodes, detected, err := ParseContent("s", []byte(b64), "auto")
+	if err != nil || len(nodes) != 2 || detected != "base64" {
+		t.Fatalf("auto base64: %v, %d nodes, detected %q", err, len(nodes), detected)
 	}
 	clash := "proxies:\n  - {name: c1, type: ss, server: 1.1.1.1, port: 1, cipher: aes-128-gcm, password: p}\n"
-	nodes, err = ParseContent("s", []byte(clash), "auto")
-	if err != nil || len(nodes) != 1 || nodes[0].Name != "c1" {
-		t.Fatalf("auto clash: %v, %+v", err, nodes)
+	nodes, detected, err = ParseContent("s", []byte(clash), "auto")
+	if err != nil || len(nodes) != 1 || nodes[0].Name != "c1" || detected != "clash" {
+		t.Fatalf("auto clash: %v, detected %q, %+v", err, detected, nodes)
 	}
-	if _, err := ParseContent("s", []byte("<html>error page</html>"), "auto"); err == nil {
+	if _, _, err := ParseContent("s", []byte("<html>error page</html>"), "auto"); err == nil {
 		t.Fatal("expected error for garbage content")
 	}
 }

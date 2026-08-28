@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"os"
 	"regexp"
@@ -15,8 +16,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Duration accepts flexible spellings like "3h", "30min", "2hr", "1d",
-// "1h30m", or a bare number of seconds.
+// Duration accepts flexible spellings like "3h", "30min", "2hr", "1d", "1h30m", or a bare number of seconds.
 type Duration time.Duration
 
 func (d Duration) D() time.Duration { return time.Duration(d) }
@@ -41,8 +41,7 @@ var (
 	)
 )
 
-// ParseFlexDuration parses "3h", "30min", "1d", "1h30m", "90s" or a bare
-// number (interpreted as seconds).
+// ParseFlexDuration parses "3h", "30min", "1d", "1h30m", "90s" or a bare number (interpreted as seconds).
 func ParseFlexDuration(s string) (time.Duration, error) {
 	s = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(s), " ", ""))
 	if s == "" {
@@ -87,6 +86,13 @@ type Config struct {
 	Timeout   Duration `yaml:"timeout"`    // upstream fetch timeout, default 30s
 	Subs      []Sub    `yaml:"subs"`
 	Keys      []Key    `yaml:"keys"`
+
+	// TrustedProxies lists extra CIDRs/IPs whose X-Forwarded-For is trusted,
+	// on top of the always-trusted loopback/private/link-local ranges.
+	TrustedProxies []string `yaml:"trusted_proxies"`
+
+	// TrustedNets is TrustedProxies parsed.
+	TrustedNets []netip.Prefix `yaml:"-"`
 }
 
 // SubNames returns sub names in config order.
@@ -135,6 +141,18 @@ func (c *Config) validate() error {
 	}
 	if len(c.Subs) == 0 {
 		return errors.New("no subs configured")
+	}
+
+	for i, s := range c.TrustedProxies {
+		if p, err := netip.ParsePrefix(s); err == nil {
+			c.TrustedNets = append(c.TrustedNets, p)
+			continue
+		}
+		if a, err := netip.ParseAddr(s); err == nil {
+			c.TrustedNets = append(c.TrustedNets, netip.PrefixFrom(a, a.BitLen()))
+			continue
+		}
+		return fmt.Errorf("trusted_proxies[%d]: invalid CIDR or IP %q", i, s)
 	}
 
 	seenNames := map[string]bool{}

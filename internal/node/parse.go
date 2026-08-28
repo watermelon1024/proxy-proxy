@@ -9,31 +9,36 @@ import (
 )
 
 // ParseContent parses a fetched subscription body into nodes.
-// typ is "clash", "base64" or "auto".
-func ParseContent(sub string, data []byte, typ string) ([]*Node, error) {
+// typ is "clash", "base64" or "auto"; detected reports the format the content actually parsed as ("clash", "base64" or "raw").
+func ParseContent(sub string, data []byte, typ string) ([]*Node, string, error) {
 	text := strings.TrimPrefix(string(data), "\ufeff")
 	switch typ {
 	case "clash":
-		return parseClash(sub, text)
+		nodes, err := parseClash(sub, text)
+		return nodes, "clash", err
 	case "base64":
 		if dec, err := b64Decode(text); err == nil && strings.Contains(string(dec), "://") {
-			return parseLines(sub, string(dec))
+			nodes, err := parseLines(sub, string(dec))
+			return nodes, "base64", err
 		}
 		// Tolerate providers that serve plain URI lines on a base64 sub.
-		return parseLines(sub, text)
+		nodes, err := parseLines(sub, text)
+		return nodes, "raw", err
 	default: // auto
 		if strings.Contains(text, "proxies:") {
 			if nodes, err := parseClash(sub, text); err == nil {
-				return nodes, nil
+				return nodes, "clash", nil
 			}
 		}
 		if dec, err := b64Decode(text); err == nil && strings.Contains(string(dec), "://") {
-			return parseLines(sub, string(dec))
+			nodes, err := parseLines(sub, string(dec))
+			return nodes, "base64", err
 		}
 		if strings.Contains(text, "://") {
-			return parseLines(sub, text)
+			nodes, err := parseLines(sub, text)
+			return nodes, "raw", err
 		}
-		return nil, errors.New("unrecognized subscription format")
+		return nil, "", errors.New("unrecognized subscription format")
 	}
 }
 

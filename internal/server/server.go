@@ -5,7 +5,9 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -41,16 +43,71 @@ func findKey(cfg *config.Config, key string) *config.Key {
 	return found
 }
 
+// clientIP resolves the real client address: when the direct peer is a
+// trusted proxy (loopback/private/link-local, or in trustedNets), the
+// rightmost untrusted hop in X-Forwarded-For wins, falling back to X-Real-Ip.
+func clientIP(r *http.Request, trustedNets []netip.Prefix) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	if !trustedIP(host, trustedNets) {
+		return host
+	}
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		hops := strings.Split(xff, ",")
+		for i := len(hops) - 1; i >= 0; i-- {
+			if hop := strings.TrimSpace(hops[i]); hop != "" && !trustedIP(hop, trustedNets) {
+				return hop
+			}
+		}
+		// Every hop is trusted infrastructure, so the leftmost is the origin client.
+		if hop := strings.TrimSpace(hops[0]); hop != "" {
+			return hop
+		}
+	}
+	if rip := r.Header.Get("X-Real-Ip"); rip != "" {
+		return rip
+	}
+	return host
+}
+
+func trustedIP(s string, trustedNets []netip.Prefix) bool {
+	ip, err := netip.ParseAddr(s)
+	if err != nil {
+		return false
+	}
+	ip = ip.Unmap()
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
+		return true
+	}
+	for _, p := range trustedNets {
+		if p.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// maskKey keeps enough of a key to tell configured keys apart in logs without recording the secret itself.
+func maskKey(k string) string {
+	if len(k) <= 8 {
+		return "***"
+	}
+	return k[:4] + "***"
+}
+
 func (s *Server) handleSub(w http.ResponseWriter, r *http.Request) {
 	cfg := s.Cfg.Load()
 	k := findKey(cfg, r.URL.Query().Get("key"))
 	if k == nil {
-		slog.Warn("rejected sub request", "remote", r.RemoteAddr)
+		slog.Warn("rejected sub request", "remote", clientIP(r, cfg.TrustedNets))
 		http.NotFound(w, r)
 		return
 	}
 
 	format, full := negotiateFormat(r)
+	slog.Info("sub request", "remote", clientIP(r, cfg.TrustedNets), "key", maskKey(k.Key), "format", format)
 	body, etag := s.Store.Render(k.Resolved, format, full)
 
 	h := w.Header()
@@ -99,8 +156,7 @@ func negotiateFormat(r *http.Request) (agg.Format, bool) {
 	return agg.FormatBase64, false
 }
 
-// updateIntervalHours advertises the shortest refresh interval among the
-// key's subs, in whole hours (minimum 1).
+// updateIntervalHours advertises the shortest refresh interval among the key's subs, in whole hours (minimum 1).
 func updateIntervalHours(cfg *config.Config, allowed []string) int {
 	set := map[string]bool{}
 	for _, n := range allowed {

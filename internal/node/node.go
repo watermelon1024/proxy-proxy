@@ -1,5 +1,4 @@
-// Package node models proxy nodes and converts between share-link URIs and
-// Clash proxy maps.
+// Package node models proxy nodes and converts between share-link URIs and Clash proxy maps.
 package node
 
 import (
@@ -12,8 +11,7 @@ import (
 	"strings"
 )
 
-// Node is one proxy from one subscription. At least one of Raw (share-link
-// URI) and Clash (Clash proxy map) is set; both are immutable after creation.
+// Node is one proxy from one subscription. At least one of Raw (share-link URI) and Clash (Clash proxy map) is set; both are immutable after creation.
 type Node struct {
 	Sub   string // source sub name
 	Name  string // display name from the source
@@ -22,8 +20,8 @@ type Node struct {
 	Raw   string
 }
 
-// URI returns the node as a share-link line, preferring the original link for
-// fidelity. ok is false for Clash proxy types with no URI representation.
+// URI returns the node as a share-link line, preferring the original link for fidelity.
+// ok is false for Clash proxy types with no URI representation.
 func (n *Node) URI() (string, bool) {
 	if n.Raw != "" {
 		return n.Raw, true
@@ -50,9 +48,8 @@ func FromClashMap(sub string, m map[string]any) *Node {
 	return &Node{Sub: sub, Name: str(m["name"]), Key: clashKey(m), Clash: m}
 }
 
-// clashKey builds a dedup key from the node identity (type, endpoint,
-// credential, transport) so the same node is recognized across base64 and
-// clash subscriptions regardless of cosmetic field differences.
+// clashKey builds a dedup key from the node identity (type, endpoint, credential, transport)
+// so the same node is recognized across base64 and clash subscriptions regardless of cosmetic field differences.
 func clashKey(m map[string]any) string {
 	typ := str(m["type"])
 	var auth string
@@ -88,8 +85,7 @@ func canonicalHash(m map[string]any) string {
 	return strconv.FormatUint(h.Sum64(), 16)
 }
 
-// UniqueNames assigns each node a display name, deduplicating collisions with
-// numeric suffixes (Clash requires unique proxy names).
+// UniqueNames assigns each node a display name, deduplicating collisions with numeric suffixes (Clash requires unique proxy names).
 func UniqueNames(nodes []*Node) []string {
 	used := map[string]bool{}
 	out := make([]string, len(nodes))

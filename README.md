@@ -69,13 +69,12 @@ and access keys. Only `proxy-proxy.example.yaml` is committed.
 listen: :8080                  # optional, default :8080
 user_agent: clash.meta/1.19.0  # optional UA sent to upstreams
 timeout: 30s                   # optional upstream fetch timeout
+trusted_proxies: [100.64.0.0/10]  # optional extra CIDRs/IPs trusted for X-Forwarded-For
 
 subs:
   - url: https://example.com/subscription
     type: auto        # auto | base64 | clash (default auto)
-    interval: 3h      # units: s/sec, m/min, h/hr, d/day, combinable,
-                      # e.g. 3h, 30min, 2hr, 1d, 1h30m; a bare number means
-                      # seconds (default: 1h, minimum: 1m)
+    interval: 3h      # refresh interval (e.g. 3h, 30min, 1d; default 1h, min 1m)
     name: Provider A  # optional; used by allowed_subs (defaults to the URL host)
 
 keys:
@@ -121,6 +120,11 @@ one sub, the upstream `Subscription-Userinfo` quota header is forwarded.
 - **Hot reload**: the config file is watched (2s poll + content hash) and
   applied atomically; in-flight data survives a reload. `SIGHUP` also triggers
   a reload. Disable watching with `-watch=false` or `PP_WATCH=0`.
+- **Request logs** resolve the client IP from `X-Forwarded-For` (rightmost
+  untrusted hop) only when the direct peer is trusted: loopback / private /
+  link-local, i.e. a reverse proxy on the same host or Docker network, plus
+  anything listed in `trusted_proxies`. Headers from untrusted peers are
+  never trusted.
 
 ## Flags & environment
 

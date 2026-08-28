@@ -1,5 +1,4 @@
-// proxy-proxy aggregates upstream proxy subscriptions into one deduplicated
-// subscription, served per access key.
+// proxy-proxy aggregates upstream proxy subscriptions into one deduplicated subscription, served per access key.
 package main
 
 import (
@@ -63,8 +62,7 @@ func main() {
 	}
 	startRefreshers(cfg)
 
-	// Reloads from SIGHUP and the file watcher funnel through one channel so
-	// refresher restarts never race.
+	// Reloads from SIGHUP and the file watcher funnel through one channel so refresher restarts never race.
 	reloadCh := make(chan string, 1)
 	go func() {
 		for reason := range reloadCh {

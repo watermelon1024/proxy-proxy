@@ -15,8 +15,8 @@ import (
 var errUnsupported = errors.New("unsupported scheme")
 
 // FromURI parses one subscription line. Unparseable or unknown-scheme lines
-// become pass-through nodes (kept verbatim in base64 output, absent from
-// clash output). Returns nil for blanks and comments.
+// become pass-through nodes (kept verbatim in base64 output, absent from clash output).
+// Returns nil for blanks and comments.
 func FromURI(sub, line string) *Node {
 	line = strings.TrimSpace(line)
 	if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "//") {
@@ -61,8 +61,7 @@ func stripFragment(s string) string {
 	return s
 }
 
-// b64Decode tolerates std/url alphabets, padding or none, and embedded
-// whitespace.
+// b64Decode tolerates std/url alphabets, padding or none, and embedded whitespace.
 func b64Decode(s string) ([]byte, error) {
 	s = strings.Map(func(r rune) rune {
 		if unicode.IsSpace(r) {
@@ -88,8 +87,7 @@ func splitHostPort(hostport string) (string, int, error) {
 	return host, port, nil
 }
 
-// parseSS handles SIP002 (base64 or percent-encoded userinfo) and the legacy
-// fully-base64 form.
+// parseSS handles SIP002 (base64 or percent-encoded userinfo) and the legacy fully-base64 form.
 func parseSS(rest string) (map[string]any, error) {
 	name := ""
 	if i := strings.LastIndex(rest, "#"); i >= 0 {
@@ -370,8 +368,7 @@ func parseHysteria2(line string) (map[string]any, error) {
 	return m, nil
 }
 
-// applyTransport maps the standard type/host/path/serviceName query params
-// onto Clash network options.
+// applyTransport maps the standard type/host/path/serviceName query params onto Clash network options.
 func applyTransport(m map[string]any, q url.Values) {
 	switch q.Get("type") {
 	case "ws":
@@ -393,8 +390,7 @@ func applyTransport(m map[string]any, q url.Values) {
 	}
 }
 
-// userinfoString returns the full decoded userinfo, rejoining any
-// user:password split done by url.Parse.
+// userinfoString returns the full decoded userinfo, rejoining any user:password split done by url.Parse.
 func userinfoString(u *url.URL) string {
 	s := u.User.Username()
 	if p, ok := u.User.Password(); ok {

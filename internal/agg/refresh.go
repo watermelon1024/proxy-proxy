@@ -29,8 +29,7 @@ func NewRefresher(store *Store, cfg *config.Config) *Refresher {
 	}
 }
 
-// Run fetches one sub immediately, then on its interval; failures keep the
-// previous snapshot and retry with exponential backoff capped at the interval.
+// Run fetches one sub immediately, then on its interval; failures keep the previous snapshot and retry with exponential backoff capped at the interval.
 func (r *Refresher) Run(ctx context.Context, sub config.Sub) {
 	backoff := time.Minute
 	for {
@@ -94,13 +93,17 @@ func (r *Refresher) Fetch(ctx context.Context, sub config.Sub) error {
 		return fmt.Errorf("body exceeds %d bytes", maxBodySize)
 	}
 
-	nodes, err := node.ParseContent(sub.Name, body, sub.Type)
+	nodes, detected, err := node.ParseContent(sub.Name, body, sub.Type)
 	if err != nil {
 		return err
 	}
 	r.Store.SetNodes(sub.Name, nodes,
 		resp.Header.Get("Etag"), resp.Header.Get("Last-Modified"),
 		resp.Header.Get("Subscription-Userinfo"))
-	slog.Info("sub updated", "sub", sub.Name, "nodes", len(nodes))
+	typ := sub.Type
+	if typ == "auto" {
+		typ = detected + "(auto)"
+	}
+	slog.Info("sub updated", "sub", sub.Name, "type", typ, "nodes", len(nodes))
 	return nil
 }
