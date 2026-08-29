@@ -24,6 +24,11 @@ func main() {
 	listen := flag.String("listen", os.Getenv("PP_LISTEN"), "listen address override (env PP_LISTEN)")
 	watch := flag.Bool("watch", envBool("PP_WATCH", true), "watch config file and hot-reload on change (env PP_WATCH)")
 	debug := flag.Bool("debug", false, "enable debug logging")
+	clientIPSource := flag.String(
+		"client-ip-source",
+		envStr("PP_CLIENT_IP_SOURCE", "direct"),
+		"client IP source: direct, cf, xff:<n>, xff:<cidr,...>, or header:<name> (env PP_CLIENT_IP_SOURCE)",
+	)
 	flag.Parse()
 
 	level := slog.LevelInfo
@@ -31,6 +36,13 @@ func main() {
 		level = slog.LevelDebug
 	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
+
+	ipSource, err := server.ParseClientIPSource(*clientIPSource)
+	if err != nil {
+		slog.Error("invalid client IP source", "err", err)
+		os.Exit(1)
+	}
+	slog.Info("client IP source configured", "source", ipSource.String())
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -109,7 +121,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           (&server.Server{Store: store, Cfg: &cfgPtr}).Routes(),
+		Handler:           (&server.Server{Store: store, Cfg: &cfgPtr, ClientIPSource: ipSource}).Routes(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {

@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -128,37 +127,5 @@ func TestHealthz(t *testing.T) {
 	resp, body := get(t, ts.URL+"/healthz", "")
 	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"nodes":1`) {
 		t.Fatalf("healthz: %d %s", resp.StatusCode, body)
-	}
-}
-
-func TestClientIP(t *testing.T) {
-	extra := []netip.Prefix{netip.MustParsePrefix("100.64.0.0/10")}
-	cases := []struct {
-		remote, xff, realIP string
-		trusted             []netip.Prefix
-		want                string
-	}{
-		{"203.0.113.9:1234", "1.2.3.4", "", nil, "203.0.113.9"}, // public peer: never trust headers
-		{"192.168.1.5:1234", "", "", nil, "192.168.1.5"},
-		{"192.168.1.5:1234", "1.2.3.4", "", nil, "1.2.3.4"},
-		{"192.168.1.5:1234", "6.6.6.6, 1.2.3.4", "", nil, "1.2.3.4"}, // spoofed left entry ignored
-		{"192.168.1.5:1234", "10.0.0.7, 172.16.0.1", "", nil, "10.0.0.7"},
-		{"[::1]:1234", "", "1.2.3.4", nil, "1.2.3.4"},
-		// trusted_proxies extends trust: as the peer and as an XFF hop
-		{"100.64.0.3:1234", "1.2.3.4", "", extra, "1.2.3.4"},
-		{"100.64.0.3:1234", "1.2.3.4", "", nil, "100.64.0.3"},
-		{"192.168.1.5:1234", "1.2.3.4, 100.64.0.3", "", extra, "1.2.3.4"},
-	}
-	for _, c := range cases {
-		r := &http.Request{RemoteAddr: c.remote, Header: http.Header{}}
-		if c.xff != "" {
-			r.Header.Set("X-Forwarded-For", c.xff)
-		}
-		if c.realIP != "" {
-			r.Header.Set("X-Real-Ip", c.realIP)
-		}
-		if got := clientIP(r, c.trusted); got != c.want {
-			t.Errorf("clientIP(%s, xff=%q, rip=%q) = %q, want %q", c.remote, c.xff, c.realIP, got, c.want)
-		}
 	}
 }

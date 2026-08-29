@@ -67,23 +67,6 @@ keys:
 	}
 }
 
-func TestTrustedProxies(t *testing.T) {
-	cfg, err := Load(writeConfig(t, `
-trusted_proxies: [100.64.0.0/10, 203.0.113.7]
-subs:
-  - url: https://a.example.com/sub
-`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(cfg.TrustedNets) != 2 {
-		t.Fatalf("want 2 nets, got %d", len(cfg.TrustedNets))
-	}
-	if cfg.TrustedNets[1].String() != "203.0.113.7/32" {
-		t.Fatalf("bare IP should become /32, got %s", cfg.TrustedNets[1])
-	}
-}
-
 func TestLoadRejectsBadConfigs(t *testing.T) {
 	bad := []string{
 		"subs: []\n",
@@ -93,7 +76,6 @@ func TestLoadRejectsBadConfigs(t *testing.T) {
 		"subs:\n  - url: https://a/s\n    name: A\nkeys:\n  - key: k\n    allowed_subs: [Missing]\n",
 		"subs:\n  - url: https://a/s\nkeys:\n  - key: k\n  - key: k\n",
 		"subs:\n  - url: https://a/s\n    typo_field: 1\n",
-		"trusted_proxies: [not-a-cidr]\nsubs:\n  - url: https://a/s\n",
 	}
 	for i, c := range bad {
 		if _, err := Load(writeConfig(t, c)); err == nil {

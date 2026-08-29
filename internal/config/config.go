@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"net/netip"
 	"net/url"
 	"os"
 	"regexp"
@@ -86,13 +85,6 @@ type Config struct {
 	Timeout   Duration `yaml:"timeout"`    // upstream fetch timeout, default 30s
 	Subs      []Sub    `yaml:"subs"`
 	Keys      []Key    `yaml:"keys"`
-
-	// TrustedProxies lists extra CIDRs/IPs whose X-Forwarded-For is trusted,
-	// on top of the always-trusted loopback/private/link-local ranges.
-	TrustedProxies []string `yaml:"trusted_proxies"`
-
-	// TrustedNets is TrustedProxies parsed.
-	TrustedNets []netip.Prefix `yaml:"-"`
 }
 
 // SubNames returns sub names in config order.
@@ -141,18 +133,6 @@ func (c *Config) validate() error {
 	}
 	if len(c.Subs) == 0 {
 		return errors.New("no subs configured")
-	}
-
-	for i, s := range c.TrustedProxies {
-		if p, err := netip.ParsePrefix(s); err == nil {
-			c.TrustedNets = append(c.TrustedNets, p)
-			continue
-		}
-		if a, err := netip.ParseAddr(s); err == nil {
-			c.TrustedNets = append(c.TrustedNets, netip.PrefixFrom(a, a.BitLen()))
-			continue
-		}
-		return fmt.Errorf("trusted_proxies[%d]: invalid CIDR or IP %q", i, s)
 	}
 
 	seenNames := map[string]bool{}

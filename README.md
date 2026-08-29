@@ -69,7 +69,6 @@ and access keys. Only `proxy-proxy.example.yaml` is committed.
 listen: :8080                  # optional, default :8080
 user_agent: clash.meta/1.19.0  # optional UA sent to upstreams
 timeout: 30s                   # optional upstream fetch timeout
-trusted_proxies: [100.64.0.0/10]  # optional extra CIDRs/IPs trusted for X-Forwarded-For
 
 subs:
   - url: https://example.com/subscription
@@ -120,11 +119,30 @@ one sub, the upstream `Subscription-Userinfo` quota header is forwarded.
 - **Hot reload**: the config file is watched (2s poll + content hash) and
   applied atomically; in-flight data survives a reload. `SIGHUP` also triggers
   a reload. Disable watching with `-watch=false` or `PP_WATCH=0`.
-- **Request logs** resolve the client IP from `X-Forwarded-For` (rightmost
-  untrusted hop) only when the direct peer is trusted: loopback / private /
-  link-local, i.e. a reverse proxy on the same host or Docker network, plus
-  anything listed in `trusted_proxies`. Headers from untrusted peers are
-  never trusted.
+- **Request logs** use the startup-only `client-ip-source` setting. The safe
+  default, `direct`, uses only the TCP peer and ignores request headers. Other
+  sources must only be enabled when the upstream proxy sanitizes or overwrites
+  the selected header:
+  - `cf` — shortcut for `header:CF-Connecting-IP`; it does not verify that the
+    request came from Cloudflare.
+  - `xff:<n>` — select the `n`th `X-Forwarded-For` IP from the right, starting
+    at 1. For `client -> Cloudflare -> Traefik -> app`, Traefik normally sends
+    `client, Cloudflare`, so use `xff:2` after configuring Traefik's
+    `forwardedHeaders.trustedIPs` with Cloudflare's ranges. Best when the
+    proxy chain length is fixed.
+  - `xff:<cidr-or-ip>[,...]` — treat the listed networks as trusted proxies
+    and select the rightmost `X-Forwarded-For` IP outside them. The keyword
+    `private` covers loopback, RFC 1918 private, and link-local ranges, so
+    `xff:private` alone handles a reverse proxy on the same host or Docker
+    network; add ranges for proxies further out, e.g.
+    `xff:private,100.64.0.0/10` for Tailscale. An untrusted direct peer is
+    logged as the client itself with its headers ignored, so this also
+    handles mixed direct and proxied access; a chain that is entirely
+    trusted logs its leftmost hop.
+  - `header:<name>` — read exactly one IP from an arbitrary request header.
+  Missing, repeated, malformed, or out-of-range values are reported as
+  `client_ip_error` in the request log; there is no silent fallback. The raw
+  TCP peer is logged separately as `peer`.
 
 ## Flags & environment
 
@@ -133,4 +151,5 @@ one sub, the upstream `Subscription-Userinfo` quota header is forwarded.
 | `-config` | `PP_CONFIG` | `proxy-proxy.yaml` | Config file path |
 | `-listen` | `PP_LISTEN` | from config | Listen address override |
 | `-watch` | `PP_WATCH` | `true` | Watch config for changes |
+| `-client-ip-source` | `PP_CLIENT_IP_SOURCE` | `direct` | Request-log client IP source: `direct`, `cf`, `xff:<n>`, `xff:<cidr,...>`, or `header:<name>` |
 | `-debug` | | `false` | Debug logging |
