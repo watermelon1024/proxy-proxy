@@ -19,7 +19,66 @@ import (
 	"github.com/watermelon/proxy-proxy/internal/server"
 )
 
+type runtimeOptions struct {
+	configPath     string
+	listen         string
+	clientIPSource string
+	watch          bool
+	debug          bool
+}
+
+type reloadOptions struct {
+	ctx           context.Context
+	configPath    string
+	listen        string
+	store         *agg.Store
+	cfg           *atomic.Pointer[config.Config]
+	reloadCh      <-chan string
+	refreshCancel context.CancelFunc
+}
+
 func main() {
+	opts := parseOptions()
+	configureLogging(opts.debug)
+	clientIPSource, err := server.ParseClientIPSource(opts.clientIPSource)
+	if err != nil {
+		slog.Error("invalid client IP source", "err", err)
+		os.Exit(1)
+	}
+	slog.Info("client IP source configured", "source", clientIPSource.String())
+	cfg, err := loadConfig(opts.configPath, opts.listen)
+	if err != nil {
+		slog.Error("load config", "err", err)
+		os.Exit(1)
+	}
+	if len(cfg.Keys) == 0 {
+		slog.Warn("no keys configured; /sub will reject every request")
+	}
+	store := agg.NewStore()
+	var cfgPtr atomic.Pointer[config.Config]
+	cfgPtr.Store(cfg)
+	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	refreshCancel := startRefreshers(rootCtx, store, cfg)
+	reloadCh := make(chan string, 1)
+	go reloadLoop(reloadOptions{
+		ctx:           rootCtx,
+		configPath:    opts.configPath,
+		listen:        opts.listen,
+		store:         store,
+		cfg:           &cfgPtr,
+		reloadCh:      reloadCh,
+		refreshCancel: refreshCancel,
+	})
+	startReloadTriggers(rootCtx, opts, reloadCh)
+	handler := (&server.Server{Store: store, Cfg: &cfgPtr, ClientIPSource: clientIPSource}).Routes()
+	srv := newHTTPServer(cfg.Listen, handler)
+	go serveHTTP(srv, stop)
+	<-rootCtx.Done()
+	shutdownHTTP(srv)
+}
+
+func parseOptions() runtimeOptions {
 	configPath := flag.String("config", envStr("PP_CONFIG", "proxy-proxy.yaml"), "path to config file (env PP_CONFIG)")
 	listen := flag.String("listen", os.Getenv("PP_LISTEN"), "listen address override (env PP_LISTEN)")
 	watch := flag.Bool("watch", envBool("PP_WATCH", true), "watch config file and hot-reload on change (env PP_WATCH)")
@@ -30,113 +89,112 @@ func main() {
 		"client IP source: direct, cf, xff:<n>, xff:<cidr,...>, or header:<name> (env PP_CLIENT_IP_SOURCE)",
 	)
 	flag.Parse()
+	return runtimeOptions{
+		configPath:     *configPath,
+		listen:         *listen,
+		clientIPSource: *clientIPSource,
+		watch:          *watch,
+		debug:          *debug,
+	}
+}
 
+func configureLogging(debug bool) {
 	level := slog.LevelInfo
-	if *debug {
+	if debug {
 		level = slog.LevelDebug
 	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
+}
 
-	ipSource, err := server.ParseClientIPSource(*clientIPSource)
-	if err != nil {
-		slog.Error("invalid client IP source", "err", err)
-		os.Exit(1)
+func loadConfig(path, listen string) (*config.Config, error) {
+	cfg, err := config.Load(path)
+	if err == nil && listen != "" {
+		cfg.Listen = listen
 	}
-	slog.Info("client IP source configured", "source", ipSource.String())
+	return cfg, err
+}
 
-	cfg, err := config.Load(*configPath)
-	if err != nil {
-		slog.Error("load config", "err", err)
-		os.Exit(1)
+func startRefreshers(ctx context.Context, store *agg.Store, cfg *config.Config) context.CancelFunc {
+	refreshCtx, cancel := context.WithCancel(ctx)
+	ref := agg.NewRefresher(store, cfg)
+	for _, sub := range cfg.Subs {
+		go ref.Run(refreshCtx, sub)
 	}
-	if *listen != "" {
-		cfg.Listen = *listen
-	}
-	if len(cfg.Keys) == 0 {
-		slog.Warn("no keys configured; /sub will reject every request")
-	}
+	return cancel
+}
 
-	store := agg.NewStore()
-	var cfgPtr atomic.Pointer[config.Config]
-	cfgPtr.Store(cfg)
-
-	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	var refreshCancel context.CancelFunc
-	startRefreshers := func(c *config.Config) {
-		ctx, cancel := context.WithCancel(rootCtx)
-		refreshCancel = cancel
-		ref := agg.NewRefresher(store, c)
-		for _, sub := range c.Subs {
-			go ref.Run(ctx, sub)
-		}
-	}
-	startRefreshers(cfg)
-
-	// Reloads from SIGHUP and the file watcher funnel through one channel so refresher restarts never race.
-	reloadCh := make(chan string, 1)
-	go func() {
-		for reason := range reloadCh {
-			ncfg, err := config.Load(*configPath)
+// reloadLoop serializes SIGHUP and file-watcher reloads so refresher restarts cannot race.
+func reloadLoop(opts reloadOptions) {
+	refreshCancel := opts.refreshCancel
+	for {
+		select {
+		case <-opts.ctx.Done():
+			return
+		case reason := <-opts.reloadCh:
+			ncfg, err := loadConfig(opts.configPath, opts.listen)
 			if err != nil {
 				slog.Error("config reload failed, keeping current config", "err", err)
 				continue
 			}
-			if *listen != "" {
-				ncfg.Listen = *listen
-			}
-			old := cfgPtr.Load()
+			old := opts.cfg.Load()
 			if ncfg.Listen != old.Listen {
 				slog.Warn("listen address change requires a restart", "current", old.Listen)
 				ncfg.Listen = old.Listen
 			}
 			refreshCancel()
-			cfgPtr.Store(ncfg)
-			store.Prune(ncfg.SubNames())
-			startRefreshers(ncfg)
+			opts.cfg.Store(ncfg)
+			opts.store.Prune(ncfg.SubNames())
+			refreshCancel = startRefreshers(opts.ctx, opts.store, ncfg)
 			slog.Info("config reloaded", "reason", reason, "subs", len(ncfg.Subs), "keys", len(ncfg.Keys))
 		}
-	}()
+	}
+}
 
+func startReloadTriggers(ctx context.Context, opts runtimeOptions, reloadCh chan<- string) {
 	requestReload := func(reason string) {
 		select {
 		case reloadCh <- reason:
 		default: // a reload is already queued
 		}
 	}
-
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
 	go func() {
-		for range hup {
-			requestReload("SIGHUP")
+		defer signal.Stop(hup)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-hup:
+				requestReload("SIGHUP")
+			}
 		}
 	}()
-
-	if *watch {
-		go watchConfig(rootCtx, *configPath, func() { requestReload("file changed") })
-		slog.Info("config watch enabled", "path", *configPath)
+	if opts.watch {
+		go watchConfig(ctx, opts.configPath, func() { requestReload("file changed") })
+		slog.Info("config watch enabled", "path", opts.configPath)
 	}
+}
 
-	srv := &http.Server{
-		Addr:              cfg.Listen,
-		Handler:           (&server.Server{Store: store, Cfg: &cfgPtr, ClientIPSource: ipSource}).Routes(),
-		ReadHeaderTimeout: 10 * time.Second,
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+}
+
+func serveHTTP(srv *http.Server, stop context.CancelFunc) {
+	slog.Info("listening", "addr", srv.Addr)
+	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
+		slog.Error("http server", "err", err)
+		stop()
 	}
-	go func() {
-		slog.Info("listening", "addr", cfg.Listen)
-		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
-			slog.Error("http server", "err", err)
-			stop()
-		}
-	}()
+}
 
-	<-rootCtx.Done()
+func shutdownHTTP(srv *http.Server) {
 	slog.Info("shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	srv.Shutdown(shutdownCtx)
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		slog.Error("HTTP server shutdown", "err", err)
+	}
 }
 
 // watchConfig polls the file every 2s; mtime/size gates a read, and a content

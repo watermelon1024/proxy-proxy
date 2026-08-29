@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/url"
 	"strconv"
+	"strings"
 )
 
 // BuildURI renders a Clash proxy map as a share-link URI with the given name.
@@ -41,23 +42,13 @@ func subMap(m map[string]any, key string) map[string]any {
 func joinList(v any) string {
 	switch l := v.(type) {
 	case []string:
-		out := ""
-		for i, s := range l {
-			if i > 0 {
-				out += ","
-			}
-			out += s
-		}
-		return out
+		return strings.Join(l, ",")
 	case []any:
-		out := ""
+		parts := make([]string, len(l))
 		for i, s := range l {
-			if i > 0 {
-				out += ","
-			}
-			out += str(s)
+			parts[i] = str(s)
 		}
-		return out
+		return strings.Join(parts, ",")
 	default:
 		return str(v)
 	}
@@ -218,7 +209,7 @@ func vlessQuery(m map[string]any) url.Values {
 		}
 	case toBool(m["tls"]):
 		q.Set("security", "tls")
-	case true:
+	default:
 		q.Set("security", "none")
 	}
 	if sni := str(m["servername"]); sni != "" {
