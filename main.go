@@ -177,7 +177,13 @@ func startReloadTriggers(ctx context.Context, opts runtimeOptions, reloadCh chan
 }
 
 func newHTTPServer(addr string, handler http.Handler) *http.Server {
-	return &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+	}
 }
 
 func serveHTTP(srv *http.Server, stop context.CancelFunc) {
