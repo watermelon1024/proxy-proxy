@@ -69,6 +69,22 @@ keys:
 	}
 }
 
+func TestLoadRawSubscriptionType(t *testing.T) {
+	cfg, err := Load(writeConfig(t, `
+subs:
+  - url: https://a.example.com/sub
+    type: raw
+keys:
+  - key: raw
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Subs[0].Type != "raw" {
+		t.Fatalf("want raw subscription type, got %q", cfg.Subs[0].Type)
+	}
+}
+
 func TestFileURLToPath(t *testing.T) {
 	want := filepath.FromSlash("/tmp/local subscription.txt")
 	got, err := FileURLToPath("file://localhost/tmp/local%20subscription.txt")

@@ -70,7 +70,7 @@ type Sub struct {
 	Name     string   `yaml:"name"`
 	URL      string   `yaml:"url"`      // HTTP(S) URL; file:// is kept for compatibility
 	File     string   `yaml:"file"`     // local filesystem path
-	Type     string   `yaml:"type"`     // auto | base64 | clash
+	Type     string   `yaml:"type"`     // auto | base64 | raw | clash
 	Interval Duration `yaml:"interval"` // default 1h, minimum 1m
 }
 
@@ -194,11 +194,11 @@ func validateSub(s *Sub, index int, seenNames map[string]bool) error {
 	switch s.Type {
 	case "":
 		s.Type = "auto"
-	case "auto", "base64", "clash":
+	case "auto", "base64", "raw", "clash":
 		// golang has no fallthrough, so we can safely leave this case empty,
 		// it won't go to the next case segment.
 	default:
-		return fmt.Errorf("subs[%d]: invalid type %q (want auto, base64 or clash)", index, s.Type)
+		return fmt.Errorf("subs[%d]: invalid type %q (want auto, base64, raw or clash)", index, s.Type)
 	}
 	if s.Interval <= 0 {
 		s.Interval = Duration(defaultInterval)

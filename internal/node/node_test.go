@@ -128,6 +128,19 @@ func TestParseContentAuto(t *testing.T) {
 	}
 }
 
+func TestParseContentRaw(t *testing.T) {
+	lines := "tuic://user:pass@a.example.com:443#A\ntrojan://pw@b.example.com:443#B"
+	nodes, detected, err := ParseContent("s", []byte(lines), "raw")
+	if err != nil || len(nodes) != 2 || detected != "raw" {
+		t.Fatalf("raw: %v, %d nodes, detected %q", err, len(nodes), detected)
+	}
+
+	b64 := base64.StdEncoding.EncodeToString([]byte(lines))
+	if _, _, err := ParseContent("s", []byte(b64), "raw"); err == nil {
+		t.Fatal("raw type should reject base64-encoded content")
+	}
+}
+
 func TestUniqueNames(t *testing.T) {
 	nodes := []*Node{{Name: "X"}, {Name: "X"}, {Name: "X 2"}, {Name: ""}}
 	names := UniqueNames(nodes)

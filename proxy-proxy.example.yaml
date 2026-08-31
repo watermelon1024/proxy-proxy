@@ -12,7 +12,7 @@
 # local filesystem path.
 subs:
   - url: https://provider-a.example.com/sub/xxxxxxxx
-    type: auto # auto | base64 | clash (default: auto)
+    type: auto # auto | base64 | raw | clash (default: auto)
     # refresh period: units s/sec, m/min, h/hr, d/day (e.g. 3h, 30min, 2hr, 1d, 1h30m; default 1h, min 1m)
     interval: 3h
     name: Provider A # optional; referenced by allowed_subs (defaults to the URL host)

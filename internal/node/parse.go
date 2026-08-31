@@ -9,7 +9,7 @@ import (
 )
 
 // ParseContent parses a fetched subscription body into nodes.
-// typ is "clash", "base64" or "auto"; detected reports the format the content actually parsed as ("clash", "base64" or "raw").
+// typ is "clash", "base64", "raw" or "auto"; detected reports the format the content actually parsed as ("clash", "base64" or "raw").
 func ParseContent(sub string, data []byte, typ string) ([]*Node, string, error) {
 	text := strings.TrimPrefix(string(data), "\ufeff")
 	switch typ {
@@ -22,6 +22,9 @@ func ParseContent(sub string, data []byte, typ string) ([]*Node, string, error) 
 			return nodes, "base64", err
 		}
 		// Tolerate providers that serve plain URI lines on a base64 sub.
+		nodes, err := parseLines(sub, text)
+		return nodes, "raw", err
+	case "raw":
 		nodes, err := parseLines(sub, text)
 		return nodes, "raw", err
 	default: // auto

@@ -72,7 +72,7 @@ timeout: 30s                   # optional upstream fetch timeout
 
 subs:
   - url: https://example.com/subscription
-    type: auto        # auto | base64 | clash (default auto)
+    type: auto        # auto | base64 | raw | clash (default auto)
     interval: 3h      # refresh interval (e.g. 3h, 30min, 1d; default 1h, min 1m)
     name: Provider A  # optional; used by allowed_subs (defaults to the URL host)
 
@@ -104,6 +104,10 @@ clients get Clash YAML, everything else gets base64). Override with:
 - `format=clash` — Clash `proxies:` list (usable as a proxy-provider)
 - `format=clash&full=1` — a complete minimal Clash config with proxy groups
 - `format=raw` — plain share-link lines (handy for debugging)
+
+Upstream subscription `type` can be set to `raw` when the provider serves
+plain share-link lines. This explicitly skips format detection; `auto` remains
+the default when the upstream format is mixed or unknown.
 
 Responses carry an `ETag` (clients get 304s), and when a key maps to exactly
 one sub, the upstream `Subscription-Userinfo` quota header is forwarded.
