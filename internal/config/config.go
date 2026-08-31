@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -66,7 +68,8 @@ func ParseFlexDuration(s string) (time.Duration, error) {
 
 type Sub struct {
 	Name     string   `yaml:"name"`
-	URL      string   `yaml:"url"`
+	URL      string   `yaml:"url"`      // HTTP(S) URL; file:// is kept for compatibility
+	File     string   `yaml:"file"`     // local filesystem path
 	Type     string   `yaml:"type"`     // auto | base64 | clash
 	Interval Duration `yaml:"interval"` // default 1h, minimum 1m
 }
@@ -85,6 +88,38 @@ type Config struct {
 	Timeout   Duration `yaml:"timeout"`    // upstream fetch timeout, default 30s
 	Subs      []Sub    `yaml:"subs"`
 	Keys      []Key    `yaml:"keys"`
+}
+
+// FileURLToPath converts a legacy file:// URL into an OS path.
+func FileURLToPath(rawURL string) (string, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", err
+	}
+	if u.Scheme != "file" {
+		return "", fmt.Errorf("want file URL, got scheme %q", u.Scheme)
+	}
+
+	path := u.Path
+	if u.Host != "" && !strings.EqualFold(u.Host, "localhost") {
+		if runtime.GOOS == "windows" {
+			return filepath.FromSlash("//" + u.Host + path), nil
+		}
+		return "", fmt.Errorf("file URL host %q is not local", u.Host)
+	}
+	if runtime.GOOS == "windows" {
+		if len(path) >= 3 && path[0] == '/' && isDriveLetter(path[1]) && path[2] == ':' {
+			path = path[1:]
+		}
+	}
+	if path == "" {
+		return "", errors.New("file URL path is empty")
+	}
+	return filepath.FromSlash(path), nil
+}
+
+func isDriveLetter(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
 // SubNames returns sub names in config order.
@@ -134,42 +169,96 @@ func (c *Config) validate() error {
 	if len(c.Subs) == 0 {
 		return errors.New("no subs configured")
 	}
+	seenNames, err := c.validateSubs()
+	if err != nil {
+		return err
+	}
+	return c.validateKeys(seenNames)
+}
 
+func (c *Config) validateSubs() (map[string]bool, error) {
 	seenNames := map[string]bool{}
 	for i := range c.Subs {
-		s := &c.Subs[i]
-		if s.URL == "" {
-			return fmt.Errorf("subs[%d]: url is required", i)
+		if err := validateSub(&c.Subs[i], i, seenNames); err != nil {
+			return nil, err
 		}
-		u, err := url.Parse(s.URL)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-			return fmt.Errorf("subs[%d]: invalid url %q", i, s.URL)
+	}
+	return seenNames, nil
+}
+
+func validateSub(s *Sub, index int, seenNames map[string]bool) error {
+	source, err := parseSubSource(s, index)
+	if err != nil {
+		return err
+	}
+	switch s.Type {
+	case "":
+		s.Type = "auto"
+	case "auto", "base64", "clash":
+		// golang has no fallthrough, so we can safely leave this case empty,
+		// it won't go to the next case segment.
+	default:
+		return fmt.Errorf("subs[%d]: invalid type %q (want auto, base64 or clash)", index, s.Type)
+	}
+	if s.Interval <= 0 {
+		s.Interval = Duration(defaultInterval)
+	}
+	if s.Interval.D() < minInterval {
+		s.Interval = Duration(minInterval)
+	}
+	if s.Name == "" {
+		baseName := defaultSubName(source)
+		s.Name = baseName
+		for n := 2; seenNames[s.Name]; n++ {
+			s.Name = fmt.Sprintf("%s-%d", baseName, n)
 		}
-		switch s.Type {
-		case "":
-			s.Type = "auto"
-		case "auto", "base64", "clash":
-		default:
-			return fmt.Errorf("subs[%d]: invalid type %q (want auto, base64 or clash)", i, s.Type)
-		}
-		if s.Interval <= 0 {
-			s.Interval = Duration(defaultInterval)
-		}
-		if s.Interval.D() < minInterval {
-			s.Interval = Duration(minInterval)
-		}
-		if s.Name == "" {
-			s.Name = u.Hostname()
-			for n := 2; seenNames[s.Name]; n++ {
-				s.Name = fmt.Sprintf("%s-%d", u.Hostname(), n)
-			}
-		}
-		if seenNames[s.Name] {
-			return fmt.Errorf("subs[%d]: duplicate name %q", i, s.Name)
-		}
-		seenNames[s.Name] = true
+	}
+	if seenNames[s.Name] {
+		return fmt.Errorf("subs[%d]: duplicate name %q", index, s.Name)
+	}
+	seenNames[s.Name] = true
+	return nil
+}
+
+type subSource struct {
+	url      *url.URL
+	filePath string
+}
+
+func parseSubSource(s *Sub, index int) (subSource, error) {
+	hasURL := s.URL != ""
+	hasFile := s.File != ""
+	if hasURL && hasFile {
+		return subSource{}, fmt.Errorf("subs[%d]: url and file cannot both be set", index)
+	}
+	if !hasURL && !hasFile {
+		return subSource{}, fmt.Errorf("subs[%d]: url or file is required", index)
+	}
+	if hasFile {
+		return subSource{filePath: s.File}, nil
 	}
 
+	u, err := url.Parse(s.URL)
+	if err != nil {
+		return subSource{}, fmt.Errorf("subs[%d]: invalid url %q", index, s.URL)
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "file":
+		path, err := FileURLToPath(s.URL)
+		if err != nil {
+			return subSource{}, fmt.Errorf("subs[%d]: invalid url %q: %w", index, s.URL, err)
+		}
+		s.File = path
+		s.URL = ""
+		return subSource{filePath: path}, nil
+	case "http", "https":
+		return subSource{url: u}, nil
+	default:
+		return subSource{}, fmt.Errorf("subs[%d]: invalid url %q", index, s.URL)
+	}
+}
+
+func (c *Config) validateKeys(seenNames map[string]bool) error {
 	seenKeys := map[string]bool{}
 	for i := range c.Keys {
 		k := &c.Keys[i]
@@ -199,4 +288,15 @@ func (c *Config) validate() error {
 		}
 	}
 	return nil
+}
+
+func defaultSubName(source subSource) string {
+	if source.filePath != "" {
+		name := filepath.Base(source.filePath)
+		if name != "." && name != string(filepath.Separator) && name != "" {
+			return name
+		}
+		return "file"
+	}
+	return source.url.Hostname()
 }

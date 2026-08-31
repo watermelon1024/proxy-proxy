@@ -60,8 +60,8 @@ go build -o proxy-proxy .
 
 `docker build -t proxy-proxy .` works too if you want a local image.
 
-The real `proxy-proxy.yaml` is gitignored — it contains your subscription URLs
-and access keys. Only `proxy-proxy.example.yaml` is committed.
+The real `proxy-proxy.yaml` is gitignored — it contains your subscription
+sources and access keys. Only `proxy-proxy.example.yaml` is committed.
 
 ## Configuration
 
@@ -75,6 +75,11 @@ subs:
     type: auto        # auto | base64 | clash (default auto)
     interval: 3h      # refresh interval (e.g. 3h, 30min, 1d; default 1h, min 1m)
     name: Provider A  # optional; used by allowed_subs (defaults to the URL host)
+
+  - file: /etc/proxy-proxy/local-subscription.txt
+    type: auto        # local filesystem path; use url or file, not both
+    interval: 1h
+    name: Local file   # optional; defaults to the file name
 
 keys:
   - key: pp-123456
@@ -114,8 +119,16 @@ one sub, the upstream `Subscription-Userinfo` quota header is forwarded.
   transport). First sub in config order wins; duplicate display names get
   numeric suffixes in Clash output.
 - **Refresh**: each sub is fetched on its own interval with conditional GETs
-  (ETag / Last-Modified). A failed refresh keeps the previous snapshot and
-  retries with exponential backoff capped at the interval.
+  (ETag / Last-Modified). Local `file` subs are read from the filesystem on
+  each interval and do not have HTTP validators. A failed refresh keeps the
+  previous snapshot and retries with exponential backoff capped at the interval.
+- **Subscription sources**: set exactly one of `url` (an `http://` or
+  `https://` URL) and `file` (a local filesystem path). Empty values are treated
+  as unset; leaving both unset, or setting both, is an error. The older
+  `url: file:///...` form remains supported and is converted to the same local
+  path internally. The file must be readable by the proxy process; when using
+  Docker, mount it into the container (the example config directory is already
+  mounted at `/etc/proxy-proxy`).
 - **Hot reload**: the config file is watched (2s poll + content hash) and
   applied atomically; in-flight data survives a reload. `SIGHUP` also triggers
   a reload. Disable watching with `-watch=false` or `PP_WATCH=0`.

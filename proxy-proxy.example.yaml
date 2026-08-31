@@ -8,6 +8,8 @@
 # timeout: 30s                   # upstream fetch timeout
 
 # --- upstream subscriptions -----------------------------------------------
+# Set exactly one source on each entry: `url` for HTTP(S), or `file` for a
+# local filesystem path.
 subs:
   - url: https://provider-a.example.com/sub/xxxxxxxx
     type: auto # auto | base64 | clash (default: auto)
@@ -19,6 +21,13 @@ subs:
     type: clash
     interval: 1d
     name: Provider B
+
+  # Local subscriptions use a filesystem path. The path is inside the process
+  # (for Docker, mount the file into the container first).
+  - file: /etc/proxy-proxy/local-subscription.txt
+    type: auto
+    interval: 1h
+    name: Local file
 
 # --- downstream access keys -----------------------------------------------
 # Users subscribe to: http://your-host:8080/sub?key=<key>

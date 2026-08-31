@@ -2,10 +2,14 @@ package agg
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/watermelon/proxy-proxy/internal/config"
@@ -19,6 +23,12 @@ type Refresher struct {
 	Store     *Store
 	Client    *http.Client
 	UserAgent string
+}
+
+type bodyMetadata struct {
+	etag         string
+	lastModified string
+	userInfo     string
 }
 
 func NewRefresher(store *Store, cfg *config.Config) *Refresher {
@@ -55,9 +65,33 @@ func (r *Refresher) Run(ctx context.Context, sub config.Sub) {
 	}
 }
 
-// Fetch performs one conditional GET and stores the parsed nodes.
+// Fetch reads one HTTP or local-file subscription and stores the parsed nodes.
 func (r *Refresher) Fetch(ctx context.Context, sub config.Sub) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sub.URL, nil)
+	if sub.File != "" && sub.URL != "" {
+		return errors.New("subscription url and file cannot both be set")
+	}
+	if sub.File != "" {
+		return r.fetchFile(ctx, sub, sub.File)
+	}
+	if sub.URL == "" {
+		return errors.New("subscription url or file is required")
+	}
+	u, err := url.Parse(sub.URL)
+	if err != nil {
+		return fmt.Errorf("parse subscription URL: %w", err)
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https":
+		return r.fetchHTTP(ctx, sub, sub.URL)
+	default:
+		// file:// URLs are normalized to Sub.File during config validation
+		// and should not reach Fetch.
+		return fmt.Errorf("unsupported subscription URL scheme %q", u.Scheme)
+	}
+}
+
+func (r *Refresher) fetchHTTP(ctx context.Context, sub config.Sub, rawURL string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return err
 	}
@@ -85,21 +119,61 @@ func (r *Refresher) Fetch(ctx context.Context, sub config.Sub) error {
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return fmt.Errorf("upstream status %s", resp.Status)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize+1))
+	body, err := readLimited(resp.Body)
 	if err != nil {
 		return err
 	}
-	if len(body) > maxBodySize {
-		return fmt.Errorf("body exceeds %d bytes", maxBodySize)
-	}
+	return r.storeBody(sub, body, bodyMetadata{
+		etag:         resp.Header.Get("Etag"),
+		lastModified: resp.Header.Get("Last-Modified"),
+		userInfo:     resp.Header.Get("Subscription-Userinfo"),
+	})
+}
 
+func (r *Refresher) fetchFile(ctx context.Context, sub config.Sub, path string) error {
+	body, err := readFileSubscription(ctx, path)
+	if err != nil {
+		return err
+	}
+	return r.storeBody(sub, body, bodyMetadata{})
+}
+
+func readFileSubscription(ctx context.Context, path string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open file subscription %q: %w", path, err)
+	}
+	defer f.Close()
+	body, err := readLimited(f)
+	if err != nil {
+		return nil, fmt.Errorf("read file subscription %q: %w", path, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+func readLimited(src io.Reader) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(src, maxBodySize+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxBodySize {
+		return nil, fmt.Errorf("body exceeds %d bytes", maxBodySize)
+	}
+	return body, nil
+}
+
+func (r *Refresher) storeBody(sub config.Sub, body []byte, metadata bodyMetadata) error {
 	nodes, detected, err := node.ParseContent(sub.Name, body, sub.Type)
 	if err != nil {
 		return err
 	}
-	r.Store.SetNodes(sub.Name, nodes,
-		resp.Header.Get("Etag"), resp.Header.Get("Last-Modified"),
-		resp.Header.Get("Subscription-Userinfo"))
+	r.Store.SetNodes(sub.Name, nodes, metadata.etag, metadata.lastModified, metadata.userInfo)
 	typ := sub.Type
 	if typ == "auto" {
 		typ = detected + "(auto)"

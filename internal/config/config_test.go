@@ -1,8 +1,10 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -67,10 +69,75 @@ keys:
 	}
 }
 
+func TestFileURLToPath(t *testing.T) {
+	want := filepath.FromSlash("/tmp/local subscription.txt")
+	got, err := FileURLToPath("file://localhost/tmp/local%20subscription.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("want path %q, got %q", want, got)
+	}
+	if _, err := FileURLToPath("https://example.com/sub"); err == nil {
+		t.Fatal("non-file URL should fail")
+	}
+	remote, err := FileURLToPath("file://server/share/sub.txt")
+	if runtime.GOOS == "windows" {
+		if err != nil || remote != filepath.FromSlash("//server/share/sub.txt") {
+			t.Fatalf("want Windows UNC path, got %q, %v", remote, err)
+		}
+	} else if err == nil {
+		t.Fatal("remote file URL should fail outside Windows")
+	}
+}
+
+func TestLoadFileSubscription(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "local subscription.txt")
+	cfg, err := Load(writeConfig(t, fmt.Sprintf(`
+subs:
+  - file: %s
+keys:
+  - key: local
+`, path)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Subs[0].File != path || cfg.Subs[0].URL != "" {
+		t.Fatalf("file source changed during load: %+v", cfg.Subs[0])
+	}
+	if cfg.Subs[0].Name != filepath.Base(path) {
+		t.Fatalf("want default file name %q, got %q", filepath.Base(path), cfg.Subs[0].Name)
+	}
+}
+
+func TestLoadFileSubscriptionURLCompatibility(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "local-subscription.txt")
+	rawURL := "file://" + filepath.ToSlash(path)
+	cfg, err := Load(writeConfig(t, fmt.Sprintf(`
+subs:
+  - url: %s
+keys:
+  - key: local
+`, rawURL)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Subs[0].File != path || cfg.Subs[0].URL != "" {
+		t.Fatalf("legacy file URL was not normalized: %+v", cfg.Subs[0])
+	}
+	if cfg.Subs[0].Name != filepath.Base(path) {
+		t.Fatalf("want default file name %q, got %q", filepath.Base(path), cfg.Subs[0].Name)
+	}
+}
+
 func TestLoadRejectsBadConfigs(t *testing.T) {
 	bad := []string{
 		"subs: []\n",
+		"subs:\n  - url: \"\"\n",
+		"subs:\n  - file: \"\"\n",
+		"subs:\n  - url: https://a/s\n    file: /tmp/sub.txt\n",
 		"subs:\n  - url: not-a-url\n",
+		"subs:\n  - url: file://\n",
 		"subs:\n  - url: https://a/s\n    type: nope\n",
 		"subs:\n  - url: https://a/s\n    name: X\n  - url: https://b/s\n    name: X\n",
 		"subs:\n  - url: https://a/s\n    name: A\nkeys:\n  - key: k\n    allowed_subs: [Missing]\n",

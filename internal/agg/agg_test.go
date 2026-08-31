@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -95,7 +97,11 @@ func TestFetchBase64AndConditional(t *testing.T) {
 	cfg := &config.Config{UserAgent: "test", Timeout: config.Duration(0)}
 	cfg.Timeout = config.Duration(1e10)
 	r := NewRefresher(store, cfg)
-	sub := config.Sub{Name: "s1", URL: ts.URL, Type: "auto"}
+	sub := config.Sub{
+		Name: "s1",
+		URL:  strings.Replace(ts.URL, "http://", "HTTP://", 1),
+		Type: "auto",
+	}
 
 	if err := r.Fetch(context.Background(), sub); err != nil {
 		t.Fatal(err)
@@ -138,5 +144,45 @@ func TestFetchErrorKeepsOldNodes(t *testing.T) {
 	store.SetError("s", context.DeadlineExceeded)
 	if got := store.Statuses([]string{"s"}); got[0].Nodes != 1 || got[0].Error == "" {
 		t.Fatalf("old nodes should survive a failed refresh: %+v", got)
+	}
+}
+
+func TestFetchFileSubscription(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "local subscription.txt")
+	payload := base64.StdEncoding.EncodeToString([]byte(ssURI("pw1", "1.2.3.4:443", "first")))
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewStore()
+	r := NewRefresher(store, &config.Config{UserAgent: "test", Timeout: config.Duration(1e10)})
+	sub := config.Sub{Name: "local", File: path, Type: "base64"}
+	if err := r.Fetch(context.Background(), sub); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Statuses([]string{"local"}); got[0].Nodes != 1 {
+		t.Fatalf("want one node from file subscription, got %+v", got)
+	}
+
+	payload = base64.StdEncoding.EncodeToString([]byte(ssURI("pw2", "5.6.7.8:8443", "second")))
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Fetch(context.Background(), sub); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := store.Render([]string{"local"}, FormatRaw, false)
+	if !strings.Contains(string(body), "5.6.7.8:8443") {
+		t.Fatalf("file refresh did not replace nodes: %s", body)
+	}
+}
+
+func TestFetchRejectsFileURL(t *testing.T) {
+	r := NewRefresher(NewStore(), &config.Config{Timeout: config.Duration(1e10)})
+	sub := config.Sub{Name: "local", URL: "file:///tmp/sub.txt", Type: "base64"}
+	err := r.Fetch(context.Background(), sub)
+	want := `unsupported subscription URL scheme "file"`
+	if err == nil || err.Error() != want {
+		t.Fatalf("want error %q, got %v", want, err)
 	}
 }
