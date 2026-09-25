@@ -6,6 +6,11 @@ proxy-proxy fetches your upstream proxy subscriptions on a schedule, merges and
 deduplicates the nodes, and re-serves them as a single subscription — with
 per-key access control over which upstream subs each downstream user can see.
 
+It can also [relay](#relay) traffic: an embedded
+[mihomo](https://github.com/MetaCubeX/mihomo) core re-serves upstream proxies of
+any protocol as plain http/socks5 proxies, and the caller's username picks the
+upstream.
+
 ## Quick start (Docker)
 
 Images are built for linux/amd64 + arm64 and pushed to GHCR by CI on every
@@ -112,6 +117,83 @@ the default when the upstream format is mixed or unknown.
 Responses carry an `ETag` (clients get 304s), and when a key maps to exactly
 one sub, the upstream `Subscription-Userinfo` quota header is forwarded.
 
+## Relay
+
+The optional `relay` section turns upstream proxies of any type mihomo supports
+(wireguard, vless, hysteria2, tuic, ...) into plain http/socks5 proxies:
+
+```yaml
+relay:
+  - name: pool
+    strategy: url-test # url-test | fallback | round-robin | consistent-hashing | sticky-sessions
+    upstream:
+      - sub: Provider A # every node of a sub, by name
+      - sub: https://example.com/other-subscription # or by URL
+        interval: 3h # URL only: refresh period (default 1h, min 1m)
+      - { name: my-trojan, type: trojan, server: trojan.example.com, port: 443,
+          password: "...", sni: trojan.example.com } # inline Clash proxy
+    downstream:
+      - type: mixed # http | socks5 | mixed (default mixed)
+        port: 1080
+        username: pool
+        password: secret
+
+  - name: wg
+    upstream:
+      - { name: wg, type: wireguard, server: wg.example.com, port: 51820, ip: 10.0.0.2,
+          private-key: "...", public-key: "..." }
+    downstream:
+      - { type: mixed, port: 1080, username: wg, password: secret }
+```
+
+Here `socks5://pool:secret@your-host:1080` goes out through the fastest of
+pool's upstreams, and `socks5://wg:secret@your-host:1080` through the wireguard
+peer.
+
+- **Upstreams** are inline Clash proxies, handed to mihomo unchanged, or `sub:`
+  references. Any `sub:` value not starting with `http://` or `https://` names
+  a sub from `subs` and follows that sub's refreshes. A URL is fetched for
+  relays only (type `auto`, never served by `/sub`, listed in `/healthz` as
+  `relay:<host>`), every `interval` (default 1h, minimum 1m); relays sharing a
+  URL share one fetch at the shortest interval. Sub nodes mihomo cannot load, and links without a Clash form (see
+  the protocol note below), are skipped with a warning.
+- **Strategy** picks among several upstreams (default `url-test`). The names
+  are mihomo's `url-test` and `fallback` groups and its three `load-balance`
+  strategies. The `round-robin` strategy changes the exit IP on every
+  connection, which breaks IP-bound sessions. A
+  relay left without usable upstreams rejects its callers.
+- **Downstreams** listen on `port` and optionally `listen` (default: all
+  interfaces). `mixed` serves http and socks5 on one port. Relays can share a
+  port when every caller is told apart by username; if they declare different
+  types, the shared port becomes `mixed`.
+  - A username without a password works with `http` only: socks5 requires a
+    password (RFC 1929).
+  - A downstream without a username owns its port alone. Only such ports relay
+    UDP, because socks5 UDP packets carry no username.
+  - Passwords never tell callers apart: mihomo keys its user table by username.
+  - Usernames cannot contain `,` `/` `(` `)` `:` or start or end with a space.
+- **Errors**: a relay that is invalid (an unknown sub, a socks5 username
+  without a password, ...) is skipped with an error in the log. When callers
+  cannot be told apart (the same username twice on one port, a shared port
+  without a username, or one port with different `listen` addresses), every
+  relay involved is skipped. The other relays, and the rest of the config,
+  still apply. YAML mistakes (an unknown or misspelled field, a wrong value
+  type) reject the whole file, as anywhere else in the config.
+- **Security**: a downstream without a username is an open proxy for anyone who
+  can reach its port. Bind it to `127.0.0.1` or firewall it.
+- **Docker**: publish relay ports as well, e.g. `-p 1080:1080`. socks5 UDP
+  needs `--network host` (compose: `network_mode: host`) instead: mihomo
+  answers a UDP request with the container's own address, which clients on
+  other machines cannot reach through a published port.
+- **Hot reload**: relay changes, and new nodes in the subs they use, apply
+  without a restart. Only what changed is rebuilt: unchanged upstreams keep
+  their handshakes and health-check results, and unchanged listeners keep
+  running. Open connections whose route changed (their relay or credentials
+  were removed or changed, or their upstream was replaced or dropped) get 5
+  minutes to finish, then are closed.
+- mihomo's errors and warnings go to the log, and its per-connection routing
+  lines appear with `-debug`.
+
 ## Behavior notes
 
 - **Protocols converted both ways** (share link ⇄ Clash): ss, vmess, vless,
@@ -170,3 +252,9 @@ one sub, the upstream `Subscription-Userinfo` quota header is forwarded.
 | `-watch` | `PP_WATCH` | `true` | Watch config for changes |
 | `-client-ip-source` | `PP_CLIENT_IP_SOURCE` | `direct` | Request-log client IP source: `direct`, `cf`, `xff:<n>`, `xff:<cidr,...>`, or `header:<name>` |
 | `-debug` | | `false` | Debug logging |
+
+## License
+
+proxy-proxy is released under the GPL-3.0 license (see [LICENSE](LICENSE)),
+because it embeds mihomo, which is GPL-3.0. Earlier versions were released
+under Apache-2.0.

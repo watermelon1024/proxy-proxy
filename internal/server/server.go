@@ -133,6 +133,6 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(map[string]any{
 		"status": "ok",
-		"subs":   s.Store.Statuses(cfg.SubNames()),
+		"subs":   s.Store.Statuses(cfg.FetchedSubNames()),
 	})
 }

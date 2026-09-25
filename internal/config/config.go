@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -82,12 +83,79 @@ type Key struct {
 	Resolved []string `yaml:"-"`
 }
 
+// Relay forwards downstream http/socks5 clients through one of its upstream proxies.
+// Relays are validated by the relay package, which skips invalid ones instead of failing the whole config.
+type Relay struct {
+	Name       string       `yaml:"name"`
+	Strategy   string       `yaml:"strategy"` // url-test | fallback | round-robin | consistent-hashing | sticky-sessions (default url-test)
+	Upstream   []Upstream   `yaml:"upstream"`
+	Downstream []Downstream `yaml:"downstream"`
+}
+
+// Upstream is either a `sub:` reference or an inline Clash proxy map.
+type Upstream struct {
+	Sub      string         // sub name, or an http(s) URL fetched only for relays
+	Interval Duration       // refresh period of a sub URL; a named sub keeps its own
+	Proxy    map[string]any // inline Clash proxy, handed to mihomo as-is
+
+	// SubName is the store key Sub resolves to: the sub's name, or for a URL its entry in
+	// Config.RelaySubs. Empty if the URL is malformed.
+	SubName string
+}
+
+func (u *Upstream) UnmarshalYAML(value *yaml.Node) error {
+	var m map[string]any
+	if err := value.Decode(&m); err != nil {
+		return err
+	}
+	if _, ok := m["sub"]; !ok {
+		u.Proxy = m
+		return nil
+	}
+	for k := range m {
+		if k != "sub" && k != "interval" {
+			return fmt.Errorf("line %d: sub only allows interval next to it, not %q", value.Line, k)
+		}
+	}
+	var ref struct {
+		Sub      string   `yaml:"sub"`
+		Interval Duration `yaml:"interval"`
+	}
+	if err := value.Decode(&ref); err != nil {
+		return err
+	}
+	if ref.Sub == "" {
+		return fmt.Errorf("line %d: sub must be a sub name or URL", value.Line)
+	}
+	u.Sub, u.Interval = ref.Sub, ref.Interval
+	return nil
+}
+
+// IsSubURL reports whether a `sub:` reference is a URL rather than a sub name.
+func IsSubURL(s string) bool {
+	lower := strings.ToLower(s)
+	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
+}
+
+type Downstream struct {
+	Type     string `yaml:"type"`   // http | socks5 | mixed (default mixed)
+	Listen   string `yaml:"listen"` // bind address (default all interfaces)
+	Port     int    `yaml:"port"`
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
+}
+
 type Config struct {
 	Listen    string   `yaml:"listen"`     // default :8080
 	UserAgent string   `yaml:"user_agent"` // default clash.meta UA
 	Timeout   Duration `yaml:"timeout"`    // upstream fetch timeout, default 30s
 	Subs      []Sub    `yaml:"subs"`
 	Keys      []Key    `yaml:"keys"`
+	Relays    []Relay  `yaml:"relay"`
+
+	// RelaySubs are subs that relay upstreams reference only by URL.
+	// They are refreshed like Subs but never served by /sub.
+	RelaySubs []Sub `yaml:"-"`
 }
 
 // FileURLToPath converts a legacy file:// URL into an OS path.
@@ -127,6 +195,20 @@ func (c *Config) SubNames() []string {
 	names := make([]string, len(c.Subs))
 	for i, s := range c.Subs {
 		names[i] = s.Name
+	}
+	return names
+}
+
+// FetchedSubs returns every sub to refresh: Subs followed by RelaySubs.
+func (c *Config) FetchedSubs() []Sub {
+	return append(slices.Clone(c.Subs), c.RelaySubs...)
+}
+
+// FetchedSubNames returns the names of FetchedSubs.
+func (c *Config) FetchedSubNames() []string {
+	names := c.SubNames()
+	for _, s := range c.RelaySubs {
+		names = append(names, s.Name)
 	}
 	return names
 }
@@ -173,7 +255,53 @@ func (c *Config) validate() error {
 	if err != nil {
 		return err
 	}
-	return c.validateKeys(seenNames)
+	if err := c.validateKeys(seenNames); err != nil {
+		return err
+	}
+	c.resolveRelaySubs(seenNames)
+	return nil
+}
+
+// resolveRelaySubs fills Upstream.SubName. A sub name is kept as is; the relay package checks that
+// it exists. A URL becomes a RelaySubs entry named "relay:<host>" with the upstream's interval
+// (default 1h, minimum 1m), shared by every upstream with the same URL at the shortest interval.
+func (c *Config) resolveRelaySubs(seenNames map[string]bool) {
+	byURL := map[string]int{} // URL -> index in RelaySubs
+	for i := range c.Relays {
+		for j := range c.Relays[i].Upstream {
+			up := &c.Relays[i].Upstream[j]
+			if up.Sub == "" {
+				continue
+			}
+			if !IsSubURL(up.Sub) {
+				up.SubName = up.Sub
+				continue
+			}
+			interval := up.Interval
+			if interval <= 0 {
+				interval = Duration(defaultInterval)
+			}
+			interval = max(interval, Duration(minInterval))
+			if k, ok := byURL[up.Sub]; ok {
+				c.RelaySubs[k].Interval = min(c.RelaySubs[k].Interval, interval)
+				up.SubName = c.RelaySubs[k].Name
+				continue
+			}
+			u, err := url.Parse(up.Sub)
+			if err != nil || u.Hostname() == "" {
+				continue
+			}
+			baseName := "relay:" + u.Hostname()
+			name := baseName
+			for n := 2; seenNames[name]; n++ {
+				name = fmt.Sprintf("%s-%d", baseName, n)
+			}
+			seenNames[name] = true
+			byURL[up.Sub] = len(c.RelaySubs)
+			c.RelaySubs = append(c.RelaySubs, Sub{Name: name, URL: up.Sub, Type: "auto", Interval: interval})
+			up.SubName = name
+		}
+	}
 }
 
 func (c *Config) validateSubs() (map[string]bool, error) {

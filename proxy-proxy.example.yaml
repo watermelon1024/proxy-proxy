@@ -38,3 +38,57 @@ keys:
   - key: pp-change-me-2
     allowed_subs: # names must match subs above
       - Provider A
+
+# --- relay (optional) -----------------------------------------------------
+# Re-serve upstream proxies of any type mihomo supports (wireguard, vless,
+# hysteria2, ...) as plain http/socks5 proxies. The caller's username picks
+# the relay, so relays can share one port:
+#   socks5://pool:change-me@your-host:1080  -> relay pool
+#   socks5://wg:change-me@your-host:1080    -> relay wg
+# Invalid relays, and every relay in a port/username conflict, are skipped
+# with an error in the log; the rest keep working. YAML mistakes (a misspelled
+# field, a wrong value type) still reject the whole file.
+relay:
+  - name: pool
+    # how to pick among several upstreams (default url-test):
+    # url-test | fallback | round-robin | consistent-hashing | sticky-sessions
+    strategy: url-test
+    upstream:
+      # every node of a sub above, by name...
+      - sub: Provider B
+      # ...or by URL (http:// or https://), fetched for relays only
+      - sub: https://provider-c.example.com/sub/xxxxxxxx
+        interval: 3h # URL only (default 1h, min 1m); a sub by name keeps its own
+      # an inline Clash proxy, handed to mihomo as-is
+      - name: my-trojan
+        type: trojan
+        server: trojan.example.com
+        port: 443
+        password: <trojan password>
+        sni: trojan.example.com
+    downstream:
+      - type: mixed # http | socks5 | mixed (default: http and socks5 on one port)
+        port: 1080
+        username: pool # username without password works with type http only
+        password: change-me
+
+  - name: wg
+    upstream:
+      - name: wg
+        type: wireguard
+        server: wg.example.com
+        port: 51820
+        ip: 10.0.0.2
+        private-key: <client private key>
+        public-key: <server public key>
+        udp: true
+    downstream:
+      # same port as pool, told apart by username
+      - type: mixed
+        port: 1080
+        username: wg
+        password: change-me
+      # a port without username belongs to this relay alone, and relays UDP too
+      - type: socks5
+        listen: 127.0.0.1
+        port: 1081

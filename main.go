@@ -1,4 +1,4 @@
-// proxy-proxy aggregates upstream proxy subscriptions into one deduplicated subscription, served per access key.
+// proxy-proxy aggregates upstream proxy subscriptions into one deduplicated subscription, served per access key, and relays traffic through upstream proxies via an embedded mihomo core.
 package main
 
 import (
@@ -16,6 +16,7 @@ import (
 
 	"github.com/watermelon/proxy-proxy/internal/agg"
 	"github.com/watermelon/proxy-proxy/internal/config"
+	"github.com/watermelon/proxy-proxy/internal/relay"
 	"github.com/watermelon/proxy-proxy/internal/server"
 )
 
@@ -32,6 +33,7 @@ type reloadOptions struct {
 	configPath    string
 	listen        string
 	store         *agg.Store
+	relays        *relay.Manager
 	cfg           *atomic.Pointer[config.Config]
 	reloadCh      <-chan string
 	refreshCancel context.CancelFunc
@@ -60,12 +62,20 @@ func main() {
 	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	refreshCancel := startRefreshers(rootCtx, store, cfg)
+	relays := relay.NewManager(store)
+	relays.SetPlan(newRelayPlan(cfg))
+	relaysDone := make(chan struct{})
+	go func() {
+		relays.Run(rootCtx)
+		close(relaysDone)
+	}()
 	reloadCh := make(chan string, 1)
 	go reloadLoop(reloadOptions{
 		ctx:           rootCtx,
 		configPath:    opts.configPath,
 		listen:        opts.listen,
 		store:         store,
+		relays:        relays,
 		cfg:           &cfgPtr,
 		reloadCh:      reloadCh,
 		refreshCancel: refreshCancel,
@@ -76,6 +86,7 @@ func main() {
 	go serveHTTP(srv, stop)
 	<-rootCtx.Done()
 	shutdownHTTP(srv)
+	<-relaysDone
 }
 
 func parseOptions() runtimeOptions {
@@ -117,10 +128,19 @@ func loadConfig(path, listen string) (*config.Config, error) {
 func startRefreshers(ctx context.Context, store *agg.Store, cfg *config.Config) context.CancelFunc {
 	refreshCtx, cancel := context.WithCancel(ctx)
 	ref := agg.NewRefresher(store, cfg)
-	for _, sub := range cfg.Subs {
+	for _, sub := range cfg.FetchedSubs() {
 		go ref.Run(refreshCtx, sub)
 	}
 	return cancel
+}
+
+// newRelayPlan logs each rejected relay; the rest of the config is used either way.
+func newRelayPlan(cfg *config.Config) *relay.Plan {
+	plan, errs := relay.NewPlan(cfg)
+	for _, err := range errs {
+		slog.Error("relay rejected", "err", err)
+	}
+	return plan
 }
 
 // reloadLoop serializes SIGHUP and file-watcher reloads so refresher restarts cannot race.
@@ -143,9 +163,10 @@ func reloadLoop(opts reloadOptions) {
 			}
 			refreshCancel()
 			opts.cfg.Store(ncfg)
-			opts.store.Prune(ncfg.SubNames())
+			opts.store.Prune(ncfg.FetchedSubNames())
 			refreshCancel = startRefreshers(opts.ctx, opts.store, ncfg)
-			slog.Info("config reloaded", "reason", reason, "subs", len(ncfg.Subs), "keys", len(ncfg.Keys))
+			opts.relays.SetPlan(newRelayPlan(ncfg))
+			slog.Info("config reloaded", "reason", reason, "subs", len(ncfg.Subs), "keys", len(ncfg.Keys), "relays", len(ncfg.Relays))
 		}
 	}
 }

@@ -186,3 +186,45 @@ func TestFetchRejectsFileURL(t *testing.T) {
 		t.Fatalf("want error %q, got %v", want, err)
 	}
 }
+
+func TestStoreChangedAndNodes(t *testing.T) {
+	s := NewStore()
+	if _, fetched := s.Nodes("subA"); fetched {
+		t.Fatal("a sub never fetched should not count as fetched")
+	}
+	n := node.FromURI("subA", ssURI("pw1", "1.1.1.1:443", "a1"))
+	s.SetNodes("subA", []*node.Node{n}, "", "", "")
+	s.SetNodes("subA", []*node.Node{n}, "", "", "")
+	select {
+	case <-s.Changed():
+	default:
+		t.Fatal("SetNodes should signal Changed")
+	}
+	select {
+	case <-s.Changed():
+		t.Fatal("signals should coalesce")
+	default:
+	}
+	if got, fetched := s.Nodes("subA"); len(got) != 1 || got[0] != n || !fetched {
+		t.Fatalf("Nodes = %v, %v", got, fetched)
+	}
+	s.Touch("subA")
+	select {
+	case <-s.Changed():
+		t.Fatal("Touch keeps the nodes, so it should not signal")
+	default:
+	}
+	s.Prune(nil)
+	select {
+	case <-s.Changed():
+	default:
+		t.Fatal("Prune should signal Changed")
+	}
+	if got, _ := s.Nodes("subA"); got != nil {
+		t.Fatalf("pruned sub still has nodes: %v", got)
+	}
+	s.SetError("subB", context.DeadlineExceeded)
+	if _, fetched := s.Nodes("subB"); !fetched {
+		t.Fatal("a failed first fetch should count as fetched")
+	}
+}

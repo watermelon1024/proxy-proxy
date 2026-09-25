@@ -36,10 +36,11 @@ type SubState struct {
 // Store holds sub snapshots plus a generation-tagged render cache: any sub update bumps the generation,
 // and stale cache entries are re-rendered lazily on the next request.
 type Store struct {
-	mu    sync.Mutex
-	subs  map[string]*SubState
-	gen   uint64
-	cache map[string]*cacheEntry
+	mu      sync.Mutex
+	subs    map[string]*SubState
+	gen     uint64
+	cache   map[string]*cacheEntry
+	changed chan struct{} // coalesced signal that some sub's nodes changed
 }
 
 type cacheEntry struct {
@@ -49,7 +50,20 @@ type cacheEntry struct {
 }
 
 func NewStore() *Store {
-	return &Store{subs: map[string]*SubState{}, cache: map[string]*cacheEntry{}}
+	return &Store{subs: map[string]*SubState{}, cache: map[string]*cacheEntry{}, changed: make(chan struct{}, 1)}
+}
+
+// Changed is signaled after any sub's nodes change; signals coalesce, so it suits a single consumer.
+func (s *Store) Changed() <-chan struct{} {
+	return s.changed
+}
+
+func (s *Store) notifyLocked() {
+	s.gen++
+	select {
+	case s.changed <- struct{}{}:
+	default: // a signal is already pending
+	}
 }
 
 func (s *Store) SetNodes(name string, nodes []*node.Node, etag, lastModified, userInfo string) {
@@ -59,7 +73,18 @@ func (s *Store) SetNodes(name string, nodes []*node.Node, etag, lastModified, us
 		Nodes: nodes, Updated: time.Now(),
 		ETag: etag, LastModified: lastModified, UserInfo: userInfo,
 	}
-	s.gen++
+	s.notifyLocked()
+}
+
+// Nodes returns the latest nodes of one sub; the slice and nodes must not be modified.
+// fetched reports whether a fetch of the sub has finished yet, successfully or not.
+func (s *Store) Nodes(name string) (nodes []*node.Node, fetched bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if st := s.subs[name]; st != nil {
+		return st.Nodes, true
+	}
+	return nil, false
 }
 
 // SetError records a fetch failure but keeps the previous nodes.
@@ -118,7 +143,7 @@ func (s *Store) Prune(keep []string) {
 		}
 	}
 	s.cache = map[string]*cacheEntry{}
-	s.gen++
+	s.notifyLocked()
 }
 
 // Status is a point-in-time summary for /healthz.
