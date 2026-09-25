@@ -1,11 +1,13 @@
 # syntax=docker/dockerfile:1
 
-FROM golang:1.25-alpine AS build
+# Build on the runner's own platform and cross-compile: compiling under QEMU emulation is many times slower.
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/proxy-proxy .
+ARG TARGETOS TARGETARCH
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/proxy-proxy .
 
 FROM alpine:3.22
 RUN apk add --no-cache ca-certificates && adduser -D -H -u 65532 proxyproxy
